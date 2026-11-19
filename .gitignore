@@ -1,0 +1,27 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+
+# Runtime artifacts — real env is secret, the example is tracked
+/.env
+/.env.*
+!/.env.example
+/runtime/
+/browser-*.port
+/browser-*.lock
+
+# Agent context (memory, tasks, docs) — local only, never versioned
+/AGENTS/
+/AGENTS.md
+/CLAUDE.md
+
+# Local editor / desktop state (JetBrains, KDE Dolphin folder settings)
+/.idea/
+.directory
+
+# Local experiments and their outputs
+/bench/

@@ -1,0 +1,39 @@
+[Unit]
+Description=simple-web-scraper — scraper resident (127.0.0.1:19020)
+Documentation=file:///mnt/store-dev/projects/daemons/simple-web-scraper/README.md
+# The project lives on a separate mount — don't start before it is available.
+RequiresMountsFor=/mnt/store-dev
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/mnt/store-dev/projects/daemons/simple-web-scraper
+# `run.sh fg` execs `uv run simple-web-scraper`, so systemd supervises the real
+# resident process — never `start`, which forks under nohup and hides the pid.
+ExecStart=/mnt/store-dev/projects/daemons/simple-web-scraper/run.sh fg
+# uv is in ~/.local/bin, which a systemd unit does not inherit.
+Environment=PATH=/home/bogdan/.local/bin:/usr/local/bin:/usr/bin:/bin
+# Don't let `uv run` try to resolve/sync from the network at boot.
+Environment=UV_FROZEN=1
+
+# Keep ./run.sh status and ./run.sh stop working alongside systemctl.
+ExecStartPost=/bin/sh -c 'echo $MAINPID > /mnt/store-dev/projects/daemons/simple-web-scraper/runtime/resident.pid'
+# The browser worker is spawned detached but stays in this service's cgroup, so
+# the default KillMode=control-group takes it (and Chromium) down with us. It
+# never runs its own cleanup in that case — drop its stale port/pid/lock here.
+ExecStopPost=/bin/sh -c 'rm -f /mnt/store-dev/projects/daemons/simple-web-scraper/runtime/resident.pid /mnt/store-dev/projects/daemons/simple-web-scraper/runtime/browser-*.port /mnt/store-dev/projects/daemons/simple-web-scraper/runtime/browser-*.pid /mnt/store-dev/projects/daemons/simple-web-scraper/runtime/browser-*.lock'
+
+# The `uv` wrapper reports a forwarded SIGTERM as 143 (128+15) rather than 0, even
+# though the resident shut down cleanly. Without this, every stop leaves the unit
+# `failed` — and, worse, `Restart=on-failure` would resurrect a deliberate
+# `./run.sh stop`, which is exactly what that setting is here to avoid.
+SuccessExitStatus=143 SIGTERM
+# on-failure (not always) so `./run.sh stop` — a clean SIGTERM — really stops it.
+Restart=on-failure
+RestartSec=5
+# Chromium is killed and respawned freely; give the browser time to die politely.
+TimeoutStopSec=30
+
+[Install]
+WantedBy=default.target

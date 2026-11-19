@@ -1,0 +1,710 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "simple-web-scraper",
+    "summary": "Scrape pages in a real browser; get their main content as markdown.",
+    "description": "Loads web pages in a real headless Chrome and returns their main content as markdown.\n\n**Zones.** `/api/1.0/scrap` loads pages — one (`POST /scrap`) or several\n(`POST /scrap/batch`). `/api/1.0/profile` is the browser's persistent profile —\n`DELETE /profile` resets it. `/health` is the resident's liveness.\n\n**Authentication.** Every `/api/1.0/*` call takes `Authorization: Bearer <SCRAPER_API_KEY>`.\nWith an empty `SCRAPER_API_KEY` the check is off — local development only. `/health` is\nalways open. Requests a browser sends from another origin are refused (403).\n\n**Verdicts, not HTTP errors.** A scrape that fails on the target's side — blocked, not\nfound, timed out — still returns HTTP 200; the verdict is in `outcome`. An HTTP error means\nthe request itself was rejected (400, 401, 403, 422) or the browser worker could not serve\nit (500).\n\n**Cold start.** The first call after idle starts the browser worker, about one to two\nseconds on top of the scrape.\n\n**No URL filtering.** The browser opens whatever URL it is given, internal addresses and\n`file://` paths included. Keep the API on 127.0.0.1 and set a key.\n\nGuide — modes, verdicts, limits, errors: `docs/api.md` in the repository.\n",
+    "version": "0.4.1"
+  },
+  "paths": {
+    "/health": {
+      "get": {
+        "tags": [
+          "service"
+        ],
+        "summary": "Resident liveness",
+        "description": "Answers without authentication and without touching the browser worker: the resident\nis up, which does not promise that a scrape would succeed.",
+        "operationId": "health_health_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OkResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/1.0/scrap": {
+      "post": {
+        "tags": [
+          "scrap"
+        ],
+        "summary": "Scrape one page",
+        "description": "Load the page in the browser and return its main content as markdown, with the\nverdict in `outcome` (see `ScrapOutcome`). `use_idle` and `use_scroll` change how the\npage is loaded.",
+        "operationId": "scrap_api_1_0_scrap_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ScrapRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The scrape result; the verdict is in `outcome`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScrapResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Sent by a browser from another origin (`Origin` differs from `Host`), code `origin_refused`. Programs send no `Origin` and are not affected.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or wrong bearer token. Only when `SCRAPER_API_KEY` is set.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "`url` is empty.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "The browser worker failed or could not be reached, even after one respawn and retry. Plain text, not JSON.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                },
+                "example": "Internal Server Error"
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      }
+    },
+    "/api/1.0/scrap/batch": {
+      "post": {
+        "tags": [
+          "scrap"
+        ],
+        "summary": "Scrape several pages",
+        "description": "Load the pages in parallel with shared options and return one result per URL, in\nrequest order.\n\nA URL that fails inside the worker comes back as `internal` instead of failing the\nbatch. For the idle timers the whole batch is one request, and it shares one\nresident→worker timeout.",
+        "operationId": "scrap_batch_api_1_0_scrap_batch_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ScrapBatchRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "One result per URL, in request order.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScrapBatchResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Sent by a browser from another origin (`Origin` differs from `Host`), code `origin_refused`. Programs send no `Origin` and are not affected.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or wrong bearer token. Only when `SCRAPER_API_KEY` is set.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "`urls` is empty once empty strings are dropped.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "The browser worker failed or could not be reached, even after one respawn and retry. Plain text, not JSON.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                },
+                "example": "Internal Server Error"
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      }
+    },
+    "/api/1.0/profile": {
+      "delete": {
+        "tags": [
+          "profile"
+        ],
+        "summary": "Reset the browser profile",
+        "description": "Delete the persistent browser profile (`runtime/profile/`: cookies, cache, local\nstorage), closing the browser first; the next scrape starts with a fresh one. Works\nwhether or not the browser is running — the worker is started if needed.\n\nIt does not wait for scrapes in flight, it cuts them off: a single `/scrap` in progress\nfails, batch items in progress come back as `internal`. Use it after switching\n`SCRAPER_PROFILE`. Nothing restores a deleted profile.",
+        "operationId": "delete_profile_api_1_0_profile_delete",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OkResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Sent by a browser from another origin (`Origin` differs from `Host`), code `origin_refused`. Programs send no `Origin` and are not affected.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or wrong bearer token. Only when `SCRAPER_API_KEY` is set.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "The browser worker failed or could not be reached, even after one respawn and retry. Plain text, not JSON.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                },
+                "example": "Internal Server Error"
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "ErrorDetail": {
+        "properties": {
+          "message": {
+            "type": "string",
+            "title": "Message",
+            "description": "Human-readable explanation."
+          },
+          "type": {
+            "type": "string",
+            "title": "Type",
+            "description": "Error class; `invalid_request_error` for every error the API raises itself.",
+            "default": "invalid_request_error"
+          },
+          "code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Code",
+            "description": "Machine-readable code, e.g. `invalid_api_key`; null when there is none."
+          }
+        },
+        "type": "object",
+        "required": [
+          "message"
+        ],
+        "title": "ErrorDetail",
+        "description": "What went wrong."
+      },
+      "ErrorResponse": {
+        "properties": {
+          "error": {
+            "$ref": "#/components/schemas/ErrorDetail"
+          }
+        },
+        "type": "object",
+        "required": [
+          "error"
+        ],
+        "title": "ErrorResponse",
+        "description": "Error envelope of 400, 401 and 403 responses.\n\nRequest-body validation errors (422) use FastAPI's `{\"detail\": [...]}` format instead.",
+        "examples": [
+          {
+            "error": {
+              "code": "invalid_api_key",
+              "message": "Invalid or missing API key.",
+              "type": "invalid_request_error"
+            }
+          }
+        ]
+      },
+      "HTTPValidationError": {
+        "properties": {
+          "detail": {
+            "items": {
+              "$ref": "#/components/schemas/ValidationError"
+            },
+            "type": "array",
+            "title": "Detail"
+          }
+        },
+        "type": "object",
+        "title": "HTTPValidationError"
+      },
+      "OkResponse": {
+        "properties": {
+          "ok": {
+            "type": "boolean",
+            "title": "Ok",
+            "description": "Always `true`.",
+            "default": true
+          }
+        },
+        "type": "object",
+        "title": "OkResponse",
+        "description": "Acknowledgement."
+      },
+      "ScrapBatchRequest": {
+        "properties": {
+          "urls": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Urls",
+            "description": "Pages to scrape; empty strings are dropped. They load in parallel: at most `SCRAPE_BATCH_CONCURRENCY` from this batch at once, within the worker's `PAGE_CONCURRENCY` page slots that all requests share. The whole call has one resident→worker timeout (`DAEMON_REQUEST_TIMEOUT_SECONDS`, 180 s by default) — size batches to fit it.",
+            "examples": [
+              [
+                "https://example.com",
+                "https://httpbin.org/status/404"
+              ]
+            ]
+          },
+          "use_idle": {
+            "type": "boolean",
+            "title": "Use Idle",
+            "description": "Wait for network idle instead of `DOMContentLoaded`: for JS-rendered pages and SPAs that fill in after DOM ready. Slower; `timeout` still caps the wait.",
+            "default": false
+          },
+          "use_scroll": {
+            "type": "boolean",
+            "title": "Use Scroll",
+            "description": "After the load, scroll to the bottom with a kinetic gesture: for lazy-loaded and infinite feeds. The scroll takes what is left of `timeout` after the load, at least 0.5 s.",
+            "default": false
+          },
+          "timeout": {
+            "type": "integer",
+            "maximum": 60.0,
+            "minimum": 1.0,
+            "title": "Timeout",
+            "description": "Budget in whole seconds, 1 to 60, for loading the page: the wait for `DOMContentLoaded` (network idle with `use_idle`) and the scroll with `use_scroll`. Whatever loaded by then is still read and extracted. A page that stops answering is abandoned at `timeout` + 15 s and reported as `timeout`.",
+            "default": 5
+          }
+        },
+        "type": "object",
+        "required": [
+          "urls"
+        ],
+        "title": "ScrapBatchRequest",
+        "description": "Scrape several pages in one call; the options apply to every URL.",
+        "examples": [
+          {
+            "urls": [
+              "https://example.com",
+              "https://httpbin.org/status/404"
+            ]
+          }
+        ]
+      },
+      "ScrapBatchResponse": {
+        "properties": {
+          "results": {
+            "items": {
+              "$ref": "#/components/schemas/ScrapResponse"
+            },
+            "type": "array",
+            "title": "Results",
+            "description": "One result per URL, in request order (after dropping empty strings). A URL that failed inside the worker comes back as `internal`; the batch itself does not fail.",
+            "default": []
+          },
+          "elapsed_ms": {
+            "type": "integer",
+            "title": "Elapsed Ms",
+            "description": "Wall time of the whole batch in the worker, in milliseconds.",
+            "default": 0
+          }
+        },
+        "type": "object",
+        "title": "ScrapBatchResponse",
+        "description": "Results of a batch, one per URL.",
+        "examples": [
+          {
+            "elapsed_ms": 792,
+            "results": [
+              {
+                "body": "<!DOCTYPE html><html lang=\"en\">…</html>",
+                "content": "This domain is for use in documentation examples…",
+                "elapsed_ms": 69,
+                "final_url": "https://example.com/",
+                "headers": {
+                  "content-type": "text/html; charset=utf-8"
+                },
+                "outcome": "ok",
+                "redirects": [],
+                "target_status": 200,
+                "title": "Example Domain",
+                "url": "https://example.com"
+              },
+              {
+                "body": "<html><head></head><body></body></html>",
+                "elapsed_ms": 791,
+                "final_url": "https://httpbin.org/status/404",
+                "headers": {
+                  "content-type": "text/html; charset=utf-8"
+                },
+                "outcome": "not_found",
+                "redirects": [],
+                "target_status": 404,
+                "title": "",
+                "url": "https://httpbin.org/status/404"
+              }
+            ]
+          }
+        ]
+      },
+      "ScrapOutcome": {
+        "type": "string",
+        "enum": [
+          "ok",
+          "redirected",
+          "not_found",
+          "access_denied",
+          "upstream_error",
+          "upstream_down",
+          "empty",
+          "timeout",
+          "internal"
+        ],
+        "description": "Verdict on the scrape — check it before using `content`. A failed scrape still comes back as HTTP 200, with the failure stated here.\n\n- `ok` — usable main content, also when the load cap fired but enough content had already loaded.\n- `redirected` — as `ok`, but the page ended on a different URL (`final_url`).\n- `not_found` — the target answered 404.\n- `access_denied` — the target answered 401, 403 or 429, or returned a short bot-wall or challenge page (Cloudflare, captcha).\n- `upstream_error` — any other 4xx or 5xx from the target.\n- `upstream_down` — no HTTP response: DNS or connection failure, or a resource the browser does not render as a page, such as a direct PDF.\n- `empty` — a response, but under 200 characters of main content, typically a JS shell; retry with `use_idle`.\n- `timeout` — the load cap fired before enough content loaded, or the page stopped answering and was abandoned.\n- `internal` — this URL failed inside the worker; batch only, the other URLs are unaffected."
+      },
+      "ScrapRequest": {
+        "properties": {
+          "url": {
+            "type": "string",
+            "title": "Url",
+            "description": "Absolute URL of the page, passed to the browser as is.",
+            "examples": [
+              "https://example.com"
+            ]
+          },
+          "use_idle": {
+            "type": "boolean",
+            "title": "Use Idle",
+            "description": "Wait for network idle instead of `DOMContentLoaded`: for JS-rendered pages and SPAs that fill in after DOM ready. Slower; `timeout` still caps the wait.",
+            "default": false
+          },
+          "use_scroll": {
+            "type": "boolean",
+            "title": "Use Scroll",
+            "description": "After the load, scroll to the bottom with a kinetic gesture: for lazy-loaded and infinite feeds. The scroll takes what is left of `timeout` after the load, at least 0.5 s.",
+            "default": false
+          },
+          "timeout": {
+            "type": "integer",
+            "maximum": 60.0,
+            "minimum": 1.0,
+            "title": "Timeout",
+            "description": "Budget in whole seconds, 1 to 60, for loading the page: the wait for `DOMContentLoaded` (network idle with `use_idle`) and the scroll with `use_scroll`. Whatever loaded by then is still read and extracted. A page that stops answering is abandoned at `timeout` + 15 s and reported as `timeout`.",
+            "default": 5
+          }
+        },
+        "type": "object",
+        "required": [
+          "url"
+        ],
+        "title": "ScrapRequest",
+        "description": "Scrape one page.",
+        "examples": [
+          {
+            "url": "https://example.com"
+          },
+          {
+            "timeout": 8,
+            "url": "https://spa.example/app",
+            "use_idle": true
+          }
+        ]
+      },
+      "ScrapResponse": {
+        "properties": {
+          "outcome": {
+            "$ref": "#/components/schemas/ScrapOutcome"
+          },
+          "url": {
+            "type": "string",
+            "title": "Url",
+            "description": "The requested URL, exactly as sent — match results by it."
+          },
+          "final_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Final Url",
+            "description": "URL the page ended on after redirects. `about:blank` when the navigation never started (`timeout`); null when the page was abandoned or failed (`internal`)."
+          },
+          "target_status": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Target Status",
+            "description": "HTTP status of the page's main document; null when there was no response (connection failure, the load cap fired first, abandoned page)."
+          },
+          "title": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Title",
+            "description": "The document `<title>`; empty or null when the page could not be read."
+          },
+          "headers": {
+            "anyOf": [
+              {
+                "additionalProperties": {
+                  "type": "string"
+                },
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Headers",
+            "description": "Response headers of the main document, lower-case names; null when there was no response."
+          },
+          "content": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Content",
+            "description": "Main content as markdown: trafilatura removes navigation, headers, footers and similar boilerplate; links and tables are kept, images dropped. Filled whatever the `outcome` — on `access_denied` it is the text of the wall. Null when nothing could be extracted."
+          },
+          "body": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Body",
+            "description": "Rendered HTML of the page (the DOM after load), unprocessed — for debugging or your own extraction. Can be large."
+          },
+          "redirects": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Redirects",
+            "description": "Reserved for intermediate redirect URLs; always empty for now.",
+            "default": []
+          },
+          "elapsed_ms": {
+            "type": "integer",
+            "title": "Elapsed Ms",
+            "description": "Time spent on this URL in the worker, in milliseconds, including the wait for a free page slot.",
+            "default": 0
+          }
+        },
+        "type": "object",
+        "required": [
+          "outcome",
+          "url"
+        ],
+        "title": "ScrapResponse",
+        "description": "Result of one scrape.\n\nRead `outcome` first: `content` is filled whatever the verdict, so a bot wall or an\nerror page comes with text too.",
+        "examples": [
+          {
+            "body": "<!DOCTYPE html><html lang=\"en\"><head>…</head><body>…</body></html>",
+            "content": "This domain is for use in documentation examples without needing permission. This is not a service; avoid relying on it for testing and monitoring purposes.",
+            "elapsed_ms": 596,
+            "final_url": "https://example.com/",
+            "headers": {
+              "content-encoding": "br",
+              "content-type": "text/html; charset=utf-8"
+            },
+            "outcome": "ok",
+            "redirects": [],
+            "target_status": 200,
+            "title": "Example Domain",
+            "url": "https://example.com"
+          }
+        ]
+      },
+      "ValidationError": {
+        "properties": {
+          "loc": {
+            "items": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "integer"
+                }
+              ]
+            },
+            "type": "array",
+            "title": "Location"
+          },
+          "msg": {
+            "type": "string",
+            "title": "Message"
+          },
+          "type": {
+            "type": "string",
+            "title": "Error Type"
+          },
+          "input": {
+            "title": "Input"
+          },
+          "ctx": {
+            "type": "object",
+            "title": "Context"
+          }
+        },
+        "type": "object",
+        "required": [
+          "loc",
+          "msg",
+          "type"
+        ],
+        "title": "ValidationError"
+      }
+    },
+    "securitySchemes": {
+      "HTTPBearer": {
+        "type": "http",
+        "description": "SCRAPER_API_KEY value",
+        "scheme": "bearer"
+      }
+    }
+  },
+  "tags": [
+    {
+      "name": "scrap",
+      "description": "Load pages in the browser and return their main content."
+    },
+    {
+      "name": "profile",
+      "description": "The persistent browser profile: cookies, cache, local storage."
+    },
+    {
+      "name": "service",
+      "description": "Liveness of the resident."
+    }
+  ]
+}
